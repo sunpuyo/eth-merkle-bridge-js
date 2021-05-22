@@ -1,7 +1,6 @@
 import { Contract } from "@herajs/client";
 import { utils } from "eth-merkle-bridge-js";
 import { BigNumber } from "bignumber.js";
-import { aergoBridgeAbi } from "../abi/AergoBridge";
 
 export async function buildFreezeToAergoTx(
     txSender,
@@ -51,7 +50,7 @@ export async function buildUnfreezeToAergoTx(
     /* eslint-disable */
     console.log('proof', proof);
     console.log('contract args', args);
-    const contract = Contract.fromAbi(aergoBridgeAbi).setAddress(toBridgeAergoAddr);
+    const contract = Contract.fromAbi(toBridgeAergoAbi).setAddress(toBridgeAergoAddr);
     const builtTx = await contract.unfreeze(...args).asTransaction({
         from: txSender,
         limit: gasLimit,
@@ -66,10 +65,11 @@ async function buildFreezeProof(
   toHerajs,
   fromBridgeAergoAddr,
   toBridgeAergoAddr,
+  toBridgeAergoAbi,
   receiverAergoAddr
 ) {
   
-  const contract = Contract.fromAbi(aergoBridgeAbi).setAddress(toBridgeAergoAddr);
+  const contract = Contract.fromAbi(toBridgeAergoAbi).setAddress(toBridgeAergoAddr);
   // check last merged height
   let query = contract.queryState("_sv__anchorHeight");
   const lastMergedHeight = await toHerajs.queryContractState(query);
@@ -85,7 +85,7 @@ async function buildFreezeProof(
   const accountRef = receiverAergoAddr + 'AmgnNKadR4gv2ELgqgtyGM9ec5EnpHj5ai14z3juNmo6m6LsdtEU';
   const freezesKey = Buffer.from('_sv__locks-'.concat(accountRef), 'utf-8');
   */
-  const fromAergoBridge = Contract.fromAbi(aergoBridgeAbi).setAddress(fromBridgeAergoAddr);
+  const fromAergoBridge = Contract.fromAbi(toBridgeAergoAbi).setAddress(fromBridgeAergoAddr);
   query = fromAergoBridge.queryState(freezesKey, false, rootFrom); //
   //query = fromAergoBridge.queryState(freezesKey);
   const proof = await fromHerajs.queryContractStateProof(query);
@@ -106,13 +106,12 @@ export async function unfreezable(
     toHerajs,
     fromBridgeAergoAddr,
     toBridgeAergoAddr,
+    toBridgeAergoAbi,
     receiverAergoAddr
 ) {
   const accountRef = receiverAergoAddr;
   const freezesKey = Buffer.from('_sv__freezes-'.concat(accountRef), 'utf-8');
-  //const fromAergoBridge = Contract.atAddress(fromBridgeAergoAddr);
-  //fromAergoBridge.loadAbi(aergoBridgeAbi);
-  const fromAergoBridge = Contract.fromAbi(aergoBridgeAbi).setAddress(fromBridgeAergoAddr);
+  const fromAergoBridge = Contract.fromAbi(toBridgeAergoAbi).setAddress(fromBridgeAergoAddr);
   
   // totalDeposit : total latest deposit including pending
   let query = fromAergoBridge.queryState(freezesKey);
@@ -128,7 +127,7 @@ export async function unfreezable(
   // get total withdrawn and last anchor height
   const unfreezesKey = Buffer.from('_sv__unfreezes-'.concat(accountRef), 'utf-8');
   const toAergoBridge = Contract.atAddress(toBridgeAergoAddr);
-  toAergoBridge.loadAbi(aergoBridgeAbi);
+  toAergoBridge.loadAbi(toBridgeAergoAbi);
   query = toAergoBridge.queryState(
       ["_sv__anchorHeight", unfreezesKey]);
   let [lastAnchorHeight, totalWithdrawn] = await toHerajs.queryContractState(query);
@@ -163,10 +162,10 @@ export async function unfreezable(
 /**
  * Get the anchoring statue of Aergo to Aergo
  */
-export async function getAnchorState(toHerajs, fromHerajs, toBridgeAergoAddr) {
+export async function getAnchorState(toHerajs, fromHerajs, toBridgeAergoAddr, toBridgeAergoAbi) {
   utils.checkAergoAddress(toBridgeAergoAddr);
   // get a anchoring status of to chain
-  const aergoBridge = Contract.atAddress(toBridgeAergoAddr).loadAbi(aergoBridgeAbi);
+  const aergoBridge = Contract.atAddress(toBridgeAergoAddr).loadAbi(toBridgeAergoAbi);
   const query = aergoBridge.queryState(
       ["_sv__anchorHeight", "_sv__tAnchor", "_sv__tFinal"]);
   const [lastAnchorHeight, tAnchor, tFinal] = await toHerajs.queryContractState(query);

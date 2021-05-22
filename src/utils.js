@@ -29,6 +29,11 @@ export function checkAergoAddress(addr) {
     }
 }
 
+export function checkTokenId(tokenId) {
+    if (false === (typeof tokenId === 'string' || tokenId instanceof String)) {
+        throw Error('Type of tokenId must be String');
+    }
+}
 
 /**
  * Get the anchoring status of Ethereum to Aergo

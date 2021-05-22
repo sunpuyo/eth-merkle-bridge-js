@@ -1,7 +1,7 @@
 import { Contract } from '@herajs/client';
 import { keccak256 } from 'web3-utils';
 import { BigNumber } from "bignumber.js";
-import { checkAergoAddress, checkEthereumAddress } from './utils';
+import { checkAergoAddress, checkEthereumAddress, checkTokenId } from './utils';
 
 
 /* Ethereum -> Aergo ERC20 token transfer */
@@ -356,4 +356,160 @@ async function withdrawable(
     const withdrawableBalance = anchoredDeposit.minus(totalWithdrawn).toString(10);
     const pending = totalDeposit.minus(anchoredDeposit).toString(10);
     return [withdrawableBalance, pending];
+}
+
+function buildLockERC721TrieKey(receiverAergoAddr, tokenId, erc721Addr) {
+    // _locksERC721 is the 10th var in EthMerkleBridge contract
+    const position = Buffer.concat([Buffer.alloc(31), Buffer.from("09", 'hex')]);
+    const accountRef = Buffer.concat([
+        Buffer.from(receiverAergoAddr, 'utf-8'),
+        Buffer.from(tokenId, 'utf-8'),
+        Buffer.from(erc721Addr.slice(2), 'hex')
+    ]);
+    return keccak256(Buffer.concat([accountRef, position]));
+}
+
+/**
+ * 이더리움 상에서 락하고 아르고 상에서 민트 가능한지 확인하는 용도
+ * @param {object} web3 Provider (metamask or other web3 compatible)
+ * @param {object} hera Herajs client
+ * @param {string} bridgeEthAddr 0x Address of bridge contrat
+ * @param {string} bridgeAergoAddr Aergo address of bridge contract
+ * @param {string} receiverAergoAddr Aergo address of receiver of unfreezed aergo tokens
+ * @param {string} tokenId locked ERC721 tokenId to mint ARC2 on aergo
+ * @param {string} erc721Addr 0x Address of erc721 token
+ * @return {string, string} Status(minted, mintable, error), and message
+ */
+ export async function validateARC2mintable(
+    web3,
+    hera,
+    bridgeEthAddr,
+    bridgeAergoAddr,
+    receiverAergoAddr,
+    tokenId,
+    erc721Addr,
+) {
+    checkEthereumAddress(bridgeEthAddr);
+    checkAergoAddress(bridgeAergoAddr);
+    checkAergoAddress(receiverAergoAddr);
+    checkEthereumAddress(erc721Addr);
+    checkTokenId(tokenId);
+
+    const ethTrieKey = buildLockERC721TrieKey(receiverAergoAddr, tokenId, erc721Addr);
+  
+    let storageValue = await web3.eth.getStorageAt(
+        bridgeEthAddr, ethTrieKey, 'latest');
+    if (storageValue === undefined) {
+        throw Error('given token (' + tokenId + ') is not locked');
+    }
+    const lockBlockNum = new BigNumber(storageValue);
+
+    if(lockBlockNum.eq(new BigNumber(0))){
+        throw Error('Token does not locked on Ethereum. or Check your input');
+    }
+    
+    const aergoStorageKey = Buffer.concat([
+        Buffer.from('_sv__mintsARC2-'.concat(receiverAergoAddr), 'utf-8'),
+        Buffer.from(tokenId, 'utf-8'),
+        Buffer.from(erc721Addr.slice(2), 'hex')
+    ]);
+    // get total withdrawn and last anchor height
+    const aergoBridge = Contract.atAddress(bridgeAergoAddr);
+    const query = aergoBridge.queryState(aergoStorageKey);
+    let mintedOnAergo = 0;
+    try {
+        mintedOnAergo = await hera.queryContractState(query);
+    } catch(Error) {
+        // when state does not exist
+        // do not handling
+        console.error(Error);
+    }
+
+    if(mintedOnAergo === undefined) {
+        return; // ok
+    }
+
+    mintedOnAergo = new BigNumber(mintedOnAergo);
+
+    if(lockBlockNum.eq(mintedOnAergo)) {
+        throw Error('The Token is Already Minted on Aergo');
+    } 
+}
+
+
+/**
+ * Build hera mint ARC2 tx object to be sent to Aergo Connect for signing and broadcasting
+ * @param {object} web3 Provider (metamask or other web3 compatible)
+ * @param {object} hera Herajs client
+ * @param {string} txSender Aergo address of account signing the transaction
+ * @param {string} bridgeAergoAddr Aergo address of bridge contract
+ * @param {json} bridgeAergoAbi Abi of Aergo bridge contract
+ * @param {string} receiverAergoAddr Aergo address that receive minted/unfeezed tokens
+ * @param {string} tokenId locked ERC721 tokenId to mint ARC2 on aergo
+ * @param {string} erc721Addr 0x Address of erc721 token
+ * @return {object} Herajs tx object
+ */
+ export async function buildUnlockERC721Tx(
+    web3,
+    hera, 
+    txSender,
+    bridgeEthAddr,
+    bridgeAergoAddr, 
+    bridgeAergoAbi,
+    receiverAergoAddr,
+    tokenId,
+    erc721Addr,
+    gasLimit=300000,
+) {
+    checkAergoAddress(txSender);
+    
+    const proof = await buildLockERC721Proof(
+        web3, hera, receiverAergoAddr, tokenId, erc721Addr, bridgeEthAddr, 
+        bridgeAergoAddr
+    );
+    const ap = proof.storageProof[0].proof;
+    const lockERC721BlockNum = {_bignum:proof.storageProof[0].value};
+    const args = [receiverAergoAddr, tokenId, lockERC721BlockNum, erc721Addr.slice(2).toLowerCase(), ap];
+    const contract = Contract.atAddress(bridgeAergoAddr);
+    contract.loadAbi(bridgeAergoAbi);
+    const builtTx = await contract.mintARC2(...args).asTransaction({
+        from: txSender,
+        limit: gasLimit,
+    });
+    return builtTx;
+}
+
+
+/**
+ * Build a lock proof from Ethereum 
+ * @param {object} web3 Provider (metamask or other web3 compatible)
+ * @param {object} hera Herajs client
+ * @param {string} receiverAergoAddr Aergo address that receive minted/unfeezed tokens
+ * @param {string} tokenId locked ERC721 tokenId to mint ARC2 on aergo
+ * @param {string} erc721Addr 0x Address of asset
+ * @param {string} bridgeEthAddr 0x Address of bridge contrat
+ * @param {string} bridgeAergoAddr Aergo address of bridge contract
+ * @return {Promise} Promise from eth_getProof
+ */
+ export async function buildLockERC721Proof(
+    web3, 
+    hera, 
+    receiverAergoAddr,
+    tokenId,
+    erc721Addr, 
+    bridgeEthAddr, 
+    bridgeAergoAddr
+) {
+    checkAergoAddress(receiverAergoAddr);
+    checkEthereumAddress(erc721Addr);
+    checkEthereumAddress(bridgeEthAddr);
+    checkAergoAddress(bridgeAergoAddr);
+    checkTokenId(tokenId);
+    // build lock proof of ERC721 in last merged height 
+    const ethTrieKey = buildLockERC721TrieKey(receiverAergoAddr, tokenId, erc721Addr);
+
+    return buildDepositProof(
+        web3, hera, bridgeEthAddr, 
+        bridgeAergoAddr, ethTrieKey
+    );
 }
