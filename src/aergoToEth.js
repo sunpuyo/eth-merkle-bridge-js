@@ -24,7 +24,7 @@ export function mint() {
 
 /**
  * Build tx to burn tokens minted by aergo bridge contract
- * @param {string} txSender Aergo address of accoun signing the tx
+ * @param {string} txSender Aergo address of account signing the tx
  * @param {string} amount Amount to freeze (string with 10^18 decimals)
  * @param {string} mintedArc1Addr Aergo address of token to burn
  * @param {string} bridgeAergoAddr Aergo address of bridge contract
@@ -57,7 +57,7 @@ export async function buildBurnTx(
 
 /**
  * Build tx to freeze aergo in bridge contract
- * @param {string} txSender Aergo address of accoun signing the tx
+ * @param {string} txSender Aergo address of account signing the tx
  * @param {string} amount Amount to freeze (string with 10^18 decimals)
  * @param {string} bridgeAergoAddr Aergo address of bridge contract
  * @param {json} bridgeAergoAbi Abi of Aergo bridge contract
@@ -90,7 +90,7 @@ export async function buildFreezeTx(
  * Get the unlockable and pending amounts transfering through the bridge
  * @param {object} web3 Provider (metamask or other web3 compatible)
  * @param {object} hera Herajs client
- * @param {string} bridgeEthAddr 0x Address of bridge contrat
+ * @param {string} bridgeEthAddr 0x Address of bridge contract
  * @param {string} bridgeAergoAddr Aergo address of bridge contract
  * @param {string} receiverEthAddr 0x address of receiver of unlocked tokens
  * @param {string} erc20Addr 0x Address of asset
@@ -128,7 +128,7 @@ export function unlockable(
  * Build a burn proof from Aergo 
  * @param {object} web3 Provider (metamask or other web3 compatible)
  * @param {object} hera Herajs client
- * @param {string} bridgeEthAddr 0x Address of bridge contrat
+ * @param {string} bridgeEthAddr 0x Address of bridge contract
  * @param {string} bridgeAergoAddr Aergo address of bridge contract
  * @param {string} receiverEthAddr 0x address to receive unlocked tokens
  * @param {string} erc20Addr 0x Address of asset
@@ -183,7 +183,7 @@ export async function buildFreezeProof(
  * Unlock assets from the Ethereum bridge contract
  * @param {object} web3 Provider (metamask or other web3 compatible)
  * @param {object} hera Herajs client
- * @param {string} bridgeEthAddr 0x Address of bridge contrat
+ * @param {string} bridgeEthAddr 0x Address of bridge contract
  * @param {object} bridgeEthAbi Bridge ABI array
  * @param {string} bridgeAergoAddr Aergo address of bridge contract
  * @param {string} receiverEthAddr 0x address to receive unlocked tokens
@@ -222,7 +222,7 @@ export async function unlock(
  * Build arguments for unlocking assets from the Ethereum bridge contract
  * @param {object} web3 Provider (metamask or other web3 compatible)
  * @param {object} hera Herajs client
- * @param {string} bridgeEthAddr 0x Address of bridge contrat
+ * @param {string} bridgeEthAddr 0x Address of bridge contract
  * @param {string} bridgeAergoAddr Aergo address of bridge contract
  * @param {string} receiverEthAddr 0x address to receive unlocked tokens
  * @param {string} erc20Addr 0x Address of asset
@@ -266,7 +266,7 @@ export async function buildUnlockArgs(
  * Build a deposit proof from Aergo (freeze/burn/lock)
  * @param {object} web3 Provider (metamask or other web3 compatible)
  * @param {object} hera Herajs client
- * @param {string} bridgeEthAddr 0x Address of bridge contrat
+ * @param {string} bridgeEthAddr 0x Address of bridge contract
  * @param {string} bridgeAergoAddr Aergo address of bridge contract
  * @param {Buffer} aergoStorageKey  key storage bytes (before hashing)
  * @return {Promise} Promise from herajs queryContractStateProof
@@ -349,4 +349,95 @@ async function withdrawable(
     const withdrawableBalance = anchoredDeposit.minus(totalWithdrawn).toString(10);
     const pending = totalDeposit.minus(anchoredDeposit).toString(10);
     return [withdrawableBalance, pending];
+}
+
+
+
+/**
+ * 아르고 상에서 번되고 이더리움 상에서 언락 할 수 있는지 확인
+ * @param {object} web3 Provider (metamask or other web3 compatible)
+ * @param {object} hera Herajs client
+ * @param {string} bridgeEthAddr 0x Address of bridge contract
+ * @param {string} bridgeAergoAddr Aergo address of bridge contract
+ * @param {string} receiverEthAddr 0x address of receiver of unlocked tokens
+ * @param {string} tokenId locked ARC2 tokenId to unlock ERC721 on ethereum
+ * @param {string} erc721Addr 0x Address of asset
+ * @return {string, string} Amount withdrawable now, amount pending new state root anchor (string with 10^18 decimals)
+ */
+ export async function validateERC721Unlockable(
+    web3,
+    hera,
+    bridgeEthAddr,
+    bridgeAergoAddr,
+    receiverEthAddr,
+    tokenId, 
+    erc721Addr
+) {
+    checkEthereumAddress(bridgeEthAddr);
+    checkAergoAddress(bridgeAergoAddr);
+    checkEthereumAddress(receiverEthAddr);
+    checkEthereumAddress(erc721Addr);
+    // _unlocks is the 11th var in EthMerkleBridge contract
+    const position = Buffer.concat(
+        [Buffer.alloc(31), Buffer.from("0a", 'hex')]);
+    const accountRef = Buffer.concat([
+        Buffer.from(receiverEthAddr.slice(2).toLowerCase(), 'hex'),
+        Buffer.from(tokenId, 'utf-8'), 
+        Buffer.from(erc721Addr.slice(2).toLowerCase(), 'hex')
+    ]);
+    const ethTrieKey = keccak256(Buffer.concat([accountRef, position]));
+    const aergoStorageKey = Buffer.concat(
+        [Buffer.from('_sv__burnsARC2-', 'utf-8'), accountRef]);
+
+    const aergoBridge = Contract.atAddress(bridgeAergoAddr);
+    // totalDeposit : total latest deposit including pending
+    let query = aergoBridge.queryState(aergoStorageKey);
+
+    let storageValue;
+    try {
+        storageValue = await hera.queryContractState(query);
+        
+    } catch (err) {
+        console.error(err);
+        throw Error('Token does not burnt on Aergo, or Check your input is valid');
+    }
+    const lockBlockNumOnAergo = new BigNumber(storageValue)
+
+    // get ethereum status
+    storageValue = await web3.eth.getStorageAt(
+        bridgeEthAddr, ethTrieKey, 'latest');
+
+    if(storageValue === undefined) {
+        return; // ok
+    }
+
+    const unlockedOnEth = new BigNumber(storageValue);
+
+    if(lockBlockNumOnAergo.eq(unlockedOnEth)) {
+        throw Error('The Token is Already Minted on Aergo');
+    }
+}
+
+
+/**
+ * Build arguments for unlocking assets from the Ethereum bridge contract
+ * @param {object} web3 Provider (metamask or other web3 compatible)
+ * @param {object} hera Herajs client
+ * @param {string} bridgeEthAddr 0x Address of bridge contract
+ * @param {string} bridgeAergoAddr Aergo address of bridge contract
+ * @param {string} receiverEthAddr 0x address to receive unlocked tokens
+ * @param {string} tokenId locked ARC2 tokenId to unlock ERC721 on ethereum
+ * @param {string} erc721Addr 0x Address of asset
+ * @return {Array} Array of arguments usable in mycrypto
+ */
+ export async function buildUnlockERC721Args(
+    web3,
+    hera, 
+    bridgeEthAddr,
+    bridgeAergoAddr,
+    receiverEthAddr,
+    tokenId,
+    erc721Addr
+) {
+    //TODO
 }

@@ -380,7 +380,7 @@ function buildLockERC721TrieKey(receiverAergoAddr, tokenId, erc721Addr) {
  * @param {string} erc721Addr 0x Address of erc721 token
  * @return {string, string} Status(minted, mintable, error), and message
  */
- export async function validateARC2mintable(
+ export async function validateARC2Mintable(
     web3,
     hera,
     bridgeEthAddr,
@@ -402,10 +402,10 @@ function buildLockERC721TrieKey(receiverAergoAddr, tokenId, erc721Addr) {
     if (storageValue === undefined) {
         throw Error('given token (' + tokenId + ') is not locked');
     }
-    const lockBlockNum = new BigNumber(storageValue);
+    const lockBlockNumOnEth = new BigNumber(storageValue);
 
-    if(lockBlockNum.eq(new BigNumber(0))){
-        throw Error('Token does not locked on Ethereum. or Check your input');
+    if(lockBlockNumOnEth.eq(new BigNumber(0))){
+        throw Error('Token does not locked on Ethereum, or Check your input is valid');
     }
     
     const aergoStorageKey = Buffer.concat([
@@ -419,10 +419,10 @@ function buildLockERC721TrieKey(receiverAergoAddr, tokenId, erc721Addr) {
     let mintedOnAergo = 0;
     try {
         mintedOnAergo = await hera.queryContractState(query);
-    } catch(Error) {
+    } catch(err) {
         // when state does not exist
         // do not handling
-        console.error(Error);
+        console.error(err);
     }
 
     if(mintedOnAergo === undefined) {
@@ -431,7 +431,7 @@ function buildLockERC721TrieKey(receiverAergoAddr, tokenId, erc721Addr) {
 
     mintedOnAergo = new BigNumber(mintedOnAergo);
 
-    if(lockBlockNum.eq(mintedOnAergo)) {
+    if(lockBlockNumOnEth.eq(mintedOnAergo)) {
         throw Error('The Token is Already Minted on Aergo');
     } 
 }
