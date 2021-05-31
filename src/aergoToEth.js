@@ -1,7 +1,7 @@
 import { Contract } from '@herajs/client';
 import { keccak256 } from 'web3-utils';
 import { BigNumber } from 'bignumber.js';
-import { checkAergoAddress, checkEthereumAddress } from './utils';
+import { checkAergoAddress, checkEthereumAddress, checkTokenId } from './utils';
 
 /* Aergo -> Ethereum ARC1 token transfer */
 /* ===================================== */
@@ -418,6 +418,40 @@ async function withdrawable(
     }
 }
 
+/**
+ * Unlock ERC721 assets from the Ethereum bridge contract
+ * @param {object} web3 Provider (metamask or other web3 compatible)
+ * @param {object} hera Herajs client
+ * @param {string} bridgeEthAddr 0x Address of bridge contract
+ * @param {object} bridgeEthAbi Bridge ABI array
+ * @param {string} bridgeAergoAddr Aergo address of bridge contract
+ * @param {string} receiverEthAddr 0x address to receive unlocked tokens
+ * @param {string} tokenId locked ARC2 tokenId to unlock ERC721 on ethereum
+ * @param {string} erc721Addr 0x Address of asset
+ * @return {Promise} Promise from web3js send transaction
+ */
+ export async function unlockERC721(
+    web3,
+    hera, 
+    bridgeEthAddr,
+    bridgeEthAbi,
+    bridgeAergoAddr,
+    receiverEthAddr,
+    tokenId,
+    erc721Addr,
+    gasLimit=300000,
+) {
+    let args = await buildUnlockERC721Args(
+        web3, hera, bridgeEthAddr, bridgeAergoAddr, receiverEthAddr, tokenId, erc721Addr
+    );
+    const contract = new web3.eth.Contract(bridgeEthAbi, bridgeEthAddr);
+    console.log(web3.eth.defaultAccount)
+    return contract.methods.unlockERC721(
+        receiverEthAddr, args.uintTokenId, args.blockNum, erc721Addr, args.mp, args.bitmap, args.leafHeight
+    ).send(
+        {from: web3.eth.defaultAccount, gas: gasLimit}
+    );
+}
 
 /**
  * Build arguments for unlocking assets from the Ethereum bridge contract
@@ -439,5 +473,38 @@ async function withdrawable(
     tokenId,
     erc721Addr
 ) {
-    //TODO
+    checkEthereumAddress(bridgeEthAddr);
+    checkAergoAddress(bridgeAergoAddr);
+    checkEthereumAddress(receiverEthAddr);
+    checkEthereumAddress(erc721Addr);
+    checkTokenId(tokenId);
+
+    const accountRef = Buffer.concat([
+        Buffer.from('_sv__burnsARC2-', 'utf-8'),
+        Buffer.from(receiverEthAddr.slice(2).toLowerCase(), 'hex'),
+        Buffer.from(tokenId, 'utf-8'), 
+        Buffer.from(erc721Addr.slice(2).toLowerCase(), 'hex')
+    ]);
+
+    const proof = await buildDepositProof(
+        web3, hera, bridgeEthAddr, bridgeAergoAddr, accountRef);
+
+    const burnARC2BlockNum = proof.varProofs[0].value
+    const ap = proof.varProofs[0].auditPath.map(function(proofNode) {
+        return "0x".concat(
+            Buffer.from(proofNode).toString('hex')
+        ).padEnd(66, '0')
+    });
+    const bitmap = "0x".concat(
+        Buffer.from(proof.varProofs[0].bitmap).toString('hex')
+    ).padEnd(66, '0');
+    const leafHeight = proof.varProofs[0].height.toString();
+
+    return {
+        uintTokenId: new BigNumber(tokenId),
+        blockNum: burnARC2BlockNum, 
+        mp: ap, 
+        bitmap: bitmap, 
+        leafHeight: leafHeight
+    }
 }
