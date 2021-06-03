@@ -445,7 +445,7 @@ async function withdrawable(
         web3, hera, bridgeEthAddr, bridgeAergoAddr, receiverEthAddr, tokenId, erc721Addr
     );
     const contract = new web3.eth.Contract(bridgeEthAbi, bridgeEthAddr);
-    console.log(web3.eth.defaultAccount)
+
     return contract.methods.unlockERC721(
         receiverEthAddr, args.uintTokenId, args.blockNum, erc721Addr, args.mp, args.bitmap, args.leafHeight
     ).send(
